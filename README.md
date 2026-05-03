@@ -128,16 +128,6 @@ npm run dev
 
 ---
 
-## Database Schema
-
-```sql
-users (id, phone_number, name, created_at)
-appointments (id, user_id, phone_number, patient_name, date, time, doctor, department, status, notes, created_at)
-call_sessions (id, session_id, phone_number, patient_name, summary, appointments_booked, started_at, ended_at, duration_seconds)
-```
-
----
-
 ## REST API Endpoints
 
 | Method | Path | Description |
@@ -151,39 +141,6 @@ call_sessions (id, session_id, phone_number, patient_name, summary, appointments
 | PATCH | `/api/appointments/{id}` | Modify appointment |
 | GET | `/api/sessions/{id}` | Get call session summary |
 | GET | `/api/health` | Health check |
-
----
-
-## Deployment
-
-### Backend (Railway / Render / EC2)
-```bash
-# Set environment variables in your platform
-# Run both services:
-uvicorn server:app --host 0.0.0.0 --port 8000
-python agent.py start  # production mode
-```
-
-### Frontend (Vercel)
-```bash
-cd frontend
-vercel deploy
-# Set NEXT_PUBLIC_BACKEND_URL and NEXT_PUBLIC_LIVEKIT_URL in Vercel dashboard
-```
-
----
-
-## Cost Per Call Estimate
-
-| Service | Model | Approx Cost |
-|---------|-------|-------------|
-| LiveKit | Realtime | ~$0.002/min |
-| Deepgram | Nova-2 | ~$0.006/min |
-| Cartesia | Sonic | ~$0.005/min |
-| Gemini | 2.0 Flash | ~$0.001/min |
-| **Total** | | **~$0.014/min** |
-
-Average 5-minute call ≈ **$0.07**
 
 ---
 
