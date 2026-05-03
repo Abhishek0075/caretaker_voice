@@ -1,0 +1,13 @@
+livekit-agents[deepgram,cartesia,silero,openai]>=0.12.0
+livekit-plugins-deepgram>=0.6.0
+livekit-plugins-cartesia>=0.4.0
+livekit-plugins-silero>=0.7.0
+google-generativeai>=0.8.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-dotenv>=1.0.0
+aiohttp>=3.10.0
+aiosqlite>=0.20.0
+python-multipart>=0.0.12
+pydantic>=2.9.0
+livekit-api>=0.7.0
