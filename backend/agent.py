@@ -340,13 +340,14 @@ async def entrypoint(ctx: agents.JobContext):
             model="google/gemini-2.5-flash",
             extra_kwargs={
                 "max_completion_tokens": 1000,
-                "temperature": 0.7,
+                "temperature": 0.3,
             },
         ),
         tts=cartesia.TTS(
             model="sonic-english",
         ),
         vad=silero.VAD.load(),
+        # For more faster generation I can use premptive generation with turn detection, but it can lead to more tool calling mistakes since the model has less context when deciding to call tools
         turn_handling=TurnHandlingOptions(
             turn_detection=MultilingualModel(),
         ),
