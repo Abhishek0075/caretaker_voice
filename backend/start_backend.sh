@@ -6,12 +6,6 @@ set -e
 echo "🩺 Starting Mykare Voice AI Backend..."
 echo ""
 
-# Check .env exists
-if [ ! -f .env ]; then
-  echo "❌ .env file not found. Copy .env.example and fill in your API keys."
-  exit 1
-fi
-
 # Activate venv if present
 # if [ -d "venv" ]; then
 #   source venv/bin/activate
