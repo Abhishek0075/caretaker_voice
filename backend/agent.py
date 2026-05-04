@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from datetime import datetime
 from typing import Annotated, Optional
 from dotenv import load_dotenv
@@ -31,6 +32,7 @@ class CallState:
         self.phone_number: Optional[str] = None
         self.patient_name: Optional[str] = None
         self.identified: bool = False
+        self.stage: str = "IDENTIFICATION"
         self.start_time: datetime = datetime.now()
         self.tool_calls: list[dict] = []
         self.appointments_this_call: list[dict] = []
@@ -70,9 +72,12 @@ async def identify_user(
     user = await db.get_or_create_user(cleaned, name)
     state.log_tool("identify_user", f"User identified: {cleaned}")
 
-    if user.get("name"):
-        return f"Welcome back, {user['name']}! I've identified you with phone number {cleaned}. How can I help you today?"
+    if user.get("name") or name:
+        state.patient_name = user.get("name") or name
+        state.stage = "INTENT"
+        return f"Welcome back, {state.patient_name}! I've identified you with phone number {cleaned}. How can I help you today?"
     else:
+        state.stage = "IDENTIFICATION"
         return f"I've registered your phone number {cleaned}. Could you please tell me your name?"
 
 
@@ -234,28 +239,34 @@ SYSTEM_PROMPT = """You are Aria, a warm and professional AI voice assistant for 
 Your role is to help patients book, manage, and cancel appointments efficiently and compassionately.
 
 ## Your Personality
-- Warm, professional, empathetic healthcare assistant
 - Speak naturally and conversationally — this is a voice call
 - Be concise — patients are listening, not reading
 - Always confirm important details (date, time, name)
 
 ## Conversation Flow
 1. Greet the patient warmly
-2. Ask for their phone number early (use identify_user tool)
-3. Ask for their name if not given
-4. Understand their intent (book/view/cancel/modify appointment)
-5. Use appropriate tools to fulfill the request
-6. Confirm actions clearly
-7. Ask if there's anything else needed
-8. Call end_conversation when done
+2. Ask for their phone number early and as soon as user provides a phone number, IMMEDIATELY  (call identify_user tool)
+3. Do not respond without calling it
+4. Ask for their name if not given
+5. Understand their intent (book/view/cancel/modify appointment)
+6. Use appropriate tools to fulfill the request
+7. Confirm actions clearly
+8. Ask if there's anything else needed
+9. Call end_conversation user is finished and says bye/goodbye/thank you
 
 ## Important Rules
 - ALWAYS call identify_user before any appointment action
+- If the user provides a phone number, IMMEDIATELY call identify_user
 - ALWAYS call fetch_slots before booking to check availability
 - ALWAYS confirm date and time with the patient before booking
 - Use natural date formats when speaking (e.g. "Monday, June 10th at 10 AM")
+- The user's phone number and name are stored after identification
+- NEVER ask for phone number again if already identified
+- ALWAYS use their name naturally in conversation
+- You already know who they are — act like it
 - Keep responses under 3 sentences for voice clarity
 - If user says bye/goodbye/thank you — call end_conversation
+
 
 ## Tool Usage
 - identify_user: First thing, get phone number
@@ -288,7 +299,56 @@ class MykareFrontDeskAgent(Agent):
         await self.session.generate_reply(
             instructions="Greet the patient warmly. Introduce yourself as Aria from Mykare Health. Ask how you can help them today."
         )
+    async def on_user_message(self, message: str):
+        state: CallState = self.session.userdata
 
+        def extract_phone(text: str) -> Optional[str]:
+            digits = re.findall(r"\d", text)
+            if len(digits) >= 10:
+                cleaned = "".join(digits)
+                return cleaned[-10:]
+            return None
+
+        # 🚨 HARD GATE: If not identified → force identify_user
+        if not state.identified:
+            phone = extract_phone(message)
+            if phone:
+                await self.session.generate_reply(
+                    user_input=message,
+                    instructions=(
+                        "The user has provided a phone number in their message. "
+                        "Call identify_user with that phone number and do not proceed to any other task."
+                    ),
+                    tools=["identify_user"],
+                )
+                return
+
+            await self.session.generate_reply(
+                user_input=message,
+                instructions=(
+                    "Politely ask the user for their 10-digit phone number. "
+                    "Do NOT proceed to any other task until identity is confirmed."
+                ),
+                tools=["identify_user"],
+            )
+            return
+
+        # After identification → move to intent stage
+        if state.stage == "IDENTIFICATION":
+            state.stage = "INTENT"
+
+            await self.session.generate_reply(
+                instructions=(
+                    f"The user is identified as {state.patient_name or 'the patient'} "
+                    f"with phone number {state.phone_number}. "
+                    "Now ask what they would like to do: "
+                    "book, view, cancel, or reschedule an appointment."
+                )
+            )
+            return
+
+        # Normal flow after that
+        await super().on_user_message(message)
 
 # ─────────────────────────────────────────────
 # Entrypoint
