@@ -2,8 +2,6 @@
 agent.py - LiveKit Voice AI Agent
 Uses: Deepgram STT, Cartesia TTS, Gemini LLM, with full tool calling
 """
-import asyncio
-import json
 import logging
 import os
 import re
@@ -26,18 +24,16 @@ logger.setLevel(logging.INFO)
 
 
 # ─────────────────────────────────────────────
-# Session state tracked per call
+# Session state
 # ─────────────────────────────────────────────
 class CallState:
     def __init__(self):
         self.phone_number: Optional[str] = None
         self.patient_name: Optional[str] = None
         self.identified: bool = False
-        self.stage: str = "IDENTIFICATION"
         self.start_time: datetime = datetime.now()
         self.tool_calls: list[dict] = []
         self.appointments_this_call: list[dict] = []
-        self.conversation_history: list[str] = []
         self.session_id: str = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     def log_tool(self, name: str, result: str):
@@ -48,95 +44,95 @@ class CallState:
         })
 
 
+def extract_phone(text: str) -> Optional[str]:
+    """Extract a 10-digit phone number from speech text."""
+    # First try to find a clean 10+ digit sequence
+    matches = re.findall(r'\b\d[\d\s\-]{8,}\d\b', text)
+    for m in matches:
+        digits = re.sub(r'\D', '', m)
+        if len(digits) >= 10:
+            return digits[-10:]
+
+    # Fallback: collect all digits
+    digits = re.sub(r'\D', '', text)
+    if len(digits) >= 10:
+        return digits[-10:]
+
+    return None
+
+
 # ─────────────────────────────────────────────
-# Tool definitions
+# Tools
 # ─────────────────────────────────────────────
 @function_tool
 async def identify_user(
     context: RunContext,
-    phone_number: Annotated[str, "Patient's 10-digit phone number"],
-    name: Annotated[Optional[str], "Patient's name if provided"] = None,
+    phone_number: Annotated[str, "Patient's 10-digit phone number. Must be exactly 10 digits, never 'unknown'."],
+    name: Annotated[Optional[str], "Patient's name if they provided it"] = None,
 ) -> str:
-    """Identify the user by their phone number. Always call this first before any appointment action."""
-    
-    """ 
-    Args :
-        - phone_number: The patient's phone number, extracted from their speech. Should be 10 digits.
-        - name: Optional patient name if they provided it during identification. This can be used to personalize the conversation immediately, but we will also look up the name in the database if possible.
+    """
+    Identify the user by their phone number.
+    ONLY call this when you have a real 10-digit number from the user.
+    Never call with 'unknown', empty string, or a name instead of a number.
     """
     state: CallState = context.userdata
 
-    # Clean phone number
-    cleaned = "".join(filter(str.isdigit, phone_number))
-    if len(cleaned) < 10:
-        return "Invalid phone number. Please provide a valid 10-digit phone number."
+    # Reject placeholder values
+    cleaned = re.sub(r'\D', '', phone_number)
+    if len(cleaned) < 10 or phone_number.lower() in ("unknown", "none", "", "n/a"):
+        return "I need a valid 10-digit phone number. Could you please say your number again?"
 
+    cleaned = cleaned[-10:]
     state.phone_number = cleaned
     if name:
         state.patient_name = name
     state.identified = True
 
     user = await db.get_or_create_user(cleaned, name)
-    state.log_tool("identify_user", f"User identified: {cleaned}")
+    state.log_tool("identify_user", f"Identified: {cleaned}")
 
-    if user.get("name") or name:
-        state.patient_name = user.get("name") or name
-        state.stage = "INTENT"
-        return f"Welcome back, {state.patient_name}! I've identified you with phone number {cleaned}. How can I help you today?"
+    display_name = user.get("name") or name
+    if display_name:
+        state.patient_name = display_name
+        return f"Got it! Welcome, {display_name}. How can I help you today?"
     else:
-        state.stage = "IDENTIFICATION"
-        return f"I've registered your phone number {cleaned}. Could you please tell me your name?"
+        return f"I've verified your number ending in {cleaned[-4:]}. Could you tell me your name?"
 
 
 @function_tool
 async def fetch_slots(
     context: RunContext,
-    date: Annotated[Optional[str], "Specific date in YYYY-MM-DD format, or leave empty for all available"] = None,
+    date: Annotated[Optional[str], "Specific date in YYYY-MM-DD format, or empty for next 3 days"] = None,
 ) -> str:
-    """Fetch available appointment slots. Call this when patient wants to book or check availability."""
-    """
-    Args:
-    - date: Optional specific date to check availability for. If not provided, fetch all upcoming slots.
-    """
+    """Fetch available appointment slots."""
     state: CallState = context.userdata
-    state.log_tool("fetch_slots", f"Fetching slots for {date or 'next 3 days'}")
+    state.log_tool("fetch_slots", f"date={date or 'next 3 days'}")
 
     slots = await db.fetch_available_slots(date)
-
     if not slots:
-        return "No available slots found for the requested date. Please try a different date."
+        return "No available slots for that date. Please try a different date."
 
-    result = "Here are the available appointment slots:\n"
+    result = "Here are the available slots:\n"
     for slot in slots:
         times = ", ".join(slot["available_times"][:4])
-        result += f"\n📅 {slot['day']} {slot['date']}: {times}"
-
+        result += f"\n{slot['day']} {slot['date']}: {times}"
     return result
 
 
 @function_tool
 async def book_appointment(
     context: RunContext,
-    date: Annotated[str, "Appointment date in YYYY-MM-DD format"],
-    time: Annotated[str, "Appointment time e.g. '10:00 AM'"],
-    doctor: Annotated[str, "Doctor name, default 'Dr. General'"] = "Dr. General",
-    department: Annotated[str, "Department e.g. General, Cardiology"] = "General",
-    notes: Annotated[str, "Any special notes"] = "",
+    date: Annotated[str, "Date in YYYY-MM-DD format"],
+    time: Annotated[str, "Time e.g. '10:00 AM'"],
+    doctor: Annotated[str, "Doctor name"] = "Dr. General",
+    department: Annotated[str, "Department"] = "General",
+    notes: Annotated[str, "Special notes"] = "",
 ) -> str:
-    """Book an appointment for the identified user."""
-    
-    """
-    Args:
-    - date: The date for the appointment in YYYY-MM-DD format.
-    - time: The time for the appointment, e.g. "10:00 AM".
-    - doctor: The doctor the patient wants to see. Default is "Dr. General".
-    - department: The department for the appointment, e.g. "General", "Cardiology". Default is "General".
-    - notes: Any special notes or requests from the patient.
-    """
+    """Book an appointment for the identified patient."""
     state: CallState = context.userdata
 
     if not state.identified or not state.phone_number:
-        return "I need to verify your identity first. Please provide your phone number."
+        return "I need to verify your identity first. What is your phone number?"
 
     patient_name = state.patient_name or "Patient"
     result = await db.book_appointment(
@@ -152,36 +148,30 @@ async def book_appointment(
     if result["success"]:
         appt = result["appointment"]
         state.appointments_this_call.append(appt)
-        state.log_tool("book_appointment", f"Booked: {date} {time}")
-        return f"✅ Appointment confirmed! {result['message']} Your appointment ID is #{appt['id']}."
+        state.log_tool("book_appointment", f"Booked #{appt['id']}: {date} {time}")
+        return f"Appointment confirmed for {date} at {time} with {doctor}. Your booking ID is #{appt['id']}."
     else:
         state.log_tool("book_appointment", f"Failed: {result['error']}")
-        return f"Sorry, I couldn't book that slot. {result['error']} Would you like to choose a different time?"
+        return f"Sorry, that slot isn't available. {result['error']} Would you like a different time?"
 
 
 @function_tool
-async def retrieve_appointments(
-    context: RunContext,
-) -> str:
+async def retrieve_appointments(context: RunContext) -> str:
     """Retrieve all upcoming appointments for the current user."""
-    """
-    Args:
-        None
-    """
     state: CallState = context.userdata
 
     if not state.identified or not state.phone_number:
-        return "Please provide your phone number first so I can look up your appointments."
+        return "Please provide your phone number first."
 
     appointments = await db.retrieve_appointments(state.phone_number)
-    state.log_tool("retrieve_appointments", f"Found {len(appointments)} appointments")
+    state.log_tool("retrieve_appointments", f"Found {len(appointments)}")
 
     if not appointments:
         return "You have no upcoming appointments. Would you like to book one?"
 
     result = f"You have {len(appointments)} appointment(s):\n"
     for appt in appointments:
-        result += f"\n🗓 ID #{appt['id']}: {appt['date']} at {appt['time']} with {appt['doctor']} ({appt['department']})"
+        result += f"\nID #{appt['id']}: {appt['date']} at {appt['time']} with {appt['doctor']}"
     return result
 
 
@@ -190,41 +180,26 @@ async def cancel_appointment(
     context: RunContext,
     appointment_id: Annotated[int, "The appointment ID to cancel"],
 ) -> str:
-    """Cancel a specific appointment by its ID."""
-    """
-    Args:
-    - appointment_id: The unique ID of the appointment to cancel. You can find this ID by first calling retrieve_appointments.
-    """
-    
+    """Cancel a specific appointment by ID."""
     state: CallState = context.userdata
 
     if not state.identified or not state.phone_number:
         return "Please verify your identity first."
 
     result = await db.cancel_appointment(appointment_id, state.phone_number)
-    state.log_tool("cancel_appointment", f"Cancel ID #{appointment_id}: {result['success']}")
+    state.log_tool("cancel_appointment", f"Cancel #{appointment_id}: {result['success']}")
 
-    if result["success"]:
-        return f"✅ {result['message']} Is there anything else I can help you with?"
-    else:
-        return f"I couldn't cancel that appointment. {result['error']}"
+    return f"Appointment #{appointment_id} cancelled successfully." if result["success"] else f"Couldn't cancel: {result['error']}"
 
 
 @function_tool
 async def modify_appointment(
     context: RunContext,
-    appointment_id: Annotated[int, "The appointment ID to modify"],
-    new_date: Annotated[Optional[str], "New date in YYYY-MM-DD format"] = None,
+    appointment_id: Annotated[int, "Appointment ID to modify"],
+    new_date: Annotated[Optional[str], "New date YYYY-MM-DD"] = None,
     new_time: Annotated[Optional[str], "New time e.g. '02:00 PM'"] = None,
 ) -> str:
     """Modify the date or time of an existing appointment."""
-    
-    """
-    Args:
-        - appointment_id: The unique ID of the appointment to modify. You can find this ID by first calling retrieve_appointments.
-        - new_date: The new date for the appointment in YYYY-MM-DD format. Leave empty if you only want to change the time.
-        - new_time: The new time for the appointment, e.g. "02:00 PM". Leave empty if you only want to change the date.
-    """
     state: CallState = context.userdata
 
     if not state.identified or not state.phone_number:
@@ -233,28 +208,19 @@ async def modify_appointment(
     result = await db.modify_appointment(appointment_id, state.phone_number, new_date, new_time)
     state.log_tool("modify_appointment", f"Modify #{appointment_id}: {result['success']}")
 
-    if result["success"]:
-        return f"✅ {result['message']} Is there anything else I can help you with?"
-    else:
-        return f"I couldn't update that appointment. {result['error']}"
+    return f"Appointment #{appointment_id} updated successfully." if result["success"] else f"Couldn't update: {result['error']}"
 
 
 @function_tool
 async def end_conversation(
     context: RunContext,
-    summary: Annotated[str, "A brief summary of what was accomplished in this call"],
+    summary: Annotated[str, "Brief summary of what was accomplished in this call"],
 ) -> str:
-    """End the conversation and generate a call summary. Call this when patient says goodbye or conversation is complete."""
-    """
-    Args:
-        - summary: A brief summary of the call, including any appointments booked, cancelled, or modified. This will be saved to the database along with the call details for future reference.
-    """
-    
+    """End the conversation. Call when patient says goodbye or is done."""
     state: CallState = context.userdata
 
     duration = int((datetime.now() - state.start_time).total_seconds())
-
-    session_data = {
+    await db.save_call_session({
         "session_id": state.session_id,
         "phone_number": state.phone_number,
         "patient_name": state.patient_name,
@@ -262,65 +228,42 @@ async def end_conversation(
         "appointments_booked": state.appointments_this_call,
         "user_preferences": {},
         "duration_seconds": duration,
-    }
-
-    await db.save_call_session(session_data)
+    })
     state.log_tool("end_conversation", "Session saved")
-
-    return (
-        f"Thank you for calling Mykare Health! {summary} "
-        "Have a great day and stay healthy! Goodbye! 👋"
-    )
+    return f"Thank you for calling Mykare Health! {summary} Have a great day, goodbye!"
 
 
 # ─────────────────────────────────────────────
-# Agent definition
+# System prompt
 # ─────────────────────────────────────────────
-SYSTEM_PROMPT = """You are Aria, a warm and professional AI voice assistant for Mykare Health Clinic. 
-Your role is to help patients book, manage, and cancel appointments efficiently and compassionately.
+SYSTEM_PROMPT = f"""You are Aria, a professional AI voice receptionist for Mykare Health Clinic.
 
-## Your Personality
-- Speak naturally and conversationally — this is a voice call
-- Be concise — patients are listening, not reading
-- Always confirm important details (date, time, name)
+## CRITICAL RULE — PHONE NUMBER FIRST
+- You MUST collect the patient's phone number before doing ANYTHING else
+- Do NOT call identify_user until the user has spoken at least 10 digits
+- Do NOT pass "unknown", a name, or anything other than real digits to identify_user
+- If the user gives their name before their number, say: "Thank you! And your phone number?"
+- Only call identify_user once you have 10 real digits from the user's speech
 
-## Conversation Flow
-1. Greet the patient warmly
-2. Ask for their phone number early and as soon as user provides a phone number, IMMEDIATELY  (call identify_user tool)
-3. Do not respond without calling it
-4. Ask for their name if not given
-5. Understand their intent (book/view/cancel/modify appointment)
-6. Use appropriate tools to fulfill the request
-7. Confirm actions clearly
-8. Ask if there's anything else needed
-9. Call end_conversation user is finished and says bye/goodbye/thank you
+## After identification
+- Use the patient's name naturally in conversation
+- Never ask for phone number again
+- Help with: booking, viewing, cancelling, or modifying appointments
+- Always fetch_slots before booking
+- Confirm date and time with patient before calling book_appointment
+- Call end_conversation when patient says goodbye or is done
 
-## Important Rules
-- ALWAYS call identify_user before any appointment action
-- If the user provides a phone number, IMMEDIATELY call identify_user
-- ALWAYS call fetch_slots before booking to check availability
-- ALWAYS confirm date and time with the patient before booking
-- Use natural date formats when speaking (e.g. "Monday, June 10th at 10 AM")
-- The user's phone number and name are stored after identification
-- NEVER ask for phone number again if already identified
-- ALWAYS use their name naturally in conversation
-- You already know who they are — act like it
-- Keep responses under 3 sentences for voice clarity
-- If user says bye/goodbye/thank you — call end_conversation
+## Voice style
+- Keep replies under 2-3 sentences
+- Speak naturally — this is a phone call
+- Use natural date formats: "Monday the 5th at 10 AM"
+
+Today is: {datetime.now().strftime("%A, %B %d, %Y")}"""
 
 
-## Tool Usage
-- identify_user: First thing, get phone number
-- fetch_slots: When patient wants to book or check times  
-- book_appointment: After confirming slot with patient
-- retrieve_appointments: When patient asks about existing bookings
-- cancel_appointment: When patient wants to cancel
-- modify_appointment: When patient wants to reschedule
-- end_conversation: When call is complete
-
-Today's date is: """ + datetime.now().strftime("%A, %B %d, %Y")
-
-
+# ─────────────────────────────────────────────
+# Agent
+# ─────────────────────────────────────────────
 class MykareFrontDeskAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
@@ -338,58 +281,45 @@ class MykareFrontDeskAgent(Agent):
 
     async def on_enter(self):
         await self.session.generate_reply(
-            instructions="Greet the patient warmly. Introduce yourself as Aria from Mykare Health. Ask how you can help them today."
+            instructions=(
+                "Greet the patient warmly as Aria from Mykare Health. "
+                "Ask for their 10-digit phone number to get started. "
+                "Do NOT call any tool yet."
+            )
         )
+
     async def on_user_message(self, message: str):
         state: CallState = self.session.userdata
 
-        def extract_phone(text: str) -> Optional[str]:
-            digits = re.findall(r"\d", text)
-            if len(digits) >= 10:
-                cleaned = "".join(digits)
-                return cleaned[-10:]
-            return None
-
-        # 🚨 HARD GATE: If not identified → force identify_user
+        # ── Gate: not yet identified ──────────────────────────────
         if not state.identified:
             phone = extract_phone(message)
+
             if phone:
+                # We have a real number — force the LLM to call identify_user with it
                 await self.session.generate_reply(
                     user_input=message,
                     instructions=(
-                        "The user has provided a phone number in their message. "
-                        "Call identify_user with that phone number and do not proceed to any other task."
+                        f"The user's message contains the phone number {phone}. "
+                        f"Call identify_user NOW with phone_number='{phone}'. "
+                        "Do not say anything before calling the tool."
                     ),
-                    tools=["identify_user"],
                 )
-                return
-
-            await self.session.generate_reply(
-                user_input=message,
-                instructions=(
-                    "Politely ask the user for their 10-digit phone number. "
-                    "Do NOT proceed to any other task until identity is confirmed."
-                ),
-                tools=["identify_user"],
-            )
+            else:
+                # No number found — ask again
+                await self.session.generate_reply(
+                    user_input=message,
+                    instructions=(
+                        "The user has not provided a valid 10-digit phone number yet. "
+                        "Politely ask them to say their phone number. "
+                        "Do NOT call any tool."
+                    ),
+                )
             return
 
-        # After identification → move to intent stage
-        if state.stage == "IDENTIFICATION":
-            state.stage = "INTENT"
-
-            await self.session.generate_reply(
-                instructions=(
-                    f"The user is identified as {state.patient_name or 'the patient'} "
-                    f"with phone number {state.phone_number}. "
-                    "Now ask what they would like to do: "
-                    "book, view, cancel, or reschedule an appointment."
-                )
-            )
-            return
-
-        # Normal flow after that
+        # ── Normal flow after identification ─────────────────────
         await super().on_user_message(message)
+
 
 # ─────────────────────────────────────────────
 # Entrypoint
@@ -408,7 +338,7 @@ async def entrypoint(ctx: agents.JobContext):
         ),
         llm=inference.LLM(
             model="google/gemini-2.5-flash",
-             extra_kwargs={
+            extra_kwargs={
                 "max_completion_tokens": 1000,
                 "temperature": 0.7,
             },
