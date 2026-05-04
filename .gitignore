@@ -10,7 +10,8 @@ build/
 .pytest_cache/
 *.db
 *.sqlite3
-
+repro_book*
+*.pdf
 # Node
 node_modules/
 .next/

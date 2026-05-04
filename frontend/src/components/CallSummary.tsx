@@ -85,6 +85,29 @@ export function CallSummary({ summary, appointments, sessionId, onNewCall }: Cal
         </p>
       )}
 
+      {/* Download PDF */}
+      {sessionId && (
+        <button
+          onClick={() => {
+            const link = document.createElement('a')
+            link.href = `${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'}/api/sessions/${sessionId}/pdf`
+            link.download = `call_summary_${sessionId}.pdf`
+            link.click()
+          }}
+          className="w-full py-3 rounded-xl font-medium text-sm transition-all duration-200 mb-2"
+          style={{
+            background: 'rgba(74,222,128,0.1)',
+            color: '#4ade80',
+            border: '1px solid rgba(74,222,128,0.2)',
+            cursor: 'pointer',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')}
+          onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
+        >
+          📄 Download Summary PDF
+        </button>
+      )}
+
       {/* CTA */}
       <button
         onClick={onNewCall}

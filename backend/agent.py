@@ -14,9 +14,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from livekit import agents, rtc
-from livekit.agents import AgentSession, Agent, RoomInputOptions, inference
+from livekit.agents import AgentSession, Agent, RoomInputOptions, inference, TurnHandlingOptions
 from livekit.plugins import deepgram, cartesia, silero
 from livekit.agents import function_tool, RunContext
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 import database as db
 
@@ -57,6 +58,12 @@ async def identify_user(
     name: Annotated[Optional[str], "Patient's name if provided"] = None,
 ) -> str:
     """Identify the user by their phone number. Always call this first before any appointment action."""
+    
+    """ 
+    Args :
+        - phone_number: The patient's phone number, extracted from their speech. Should be 10 digits.
+        - name: Optional patient name if they provided it during identification. This can be used to personalize the conversation immediately, but we will also look up the name in the database if possible.
+    """
     state: CallState = context.userdata
 
     # Clean phone number
@@ -87,6 +94,10 @@ async def fetch_slots(
     date: Annotated[Optional[str], "Specific date in YYYY-MM-DD format, or leave empty for all available"] = None,
 ) -> str:
     """Fetch available appointment slots. Call this when patient wants to book or check availability."""
+    """
+    Args:
+    - date: Optional specific date to check availability for. If not provided, fetch all upcoming slots.
+    """
     state: CallState = context.userdata
     state.log_tool("fetch_slots", f"Fetching slots for {date or 'next 3 days'}")
 
@@ -113,6 +124,15 @@ async def book_appointment(
     notes: Annotated[str, "Any special notes"] = "",
 ) -> str:
     """Book an appointment for the identified user."""
+    
+    """
+    Args:
+    - date: The date for the appointment in YYYY-MM-DD format.
+    - time: The time for the appointment, e.g. "10:00 AM".
+    - doctor: The doctor the patient wants to see. Default is "Dr. General".
+    - department: The department for the appointment, e.g. "General", "Cardiology". Default is "General".
+    - notes: Any special notes or requests from the patient.
+    """
     state: CallState = context.userdata
 
     if not state.identified or not state.phone_number:
@@ -144,6 +164,10 @@ async def retrieve_appointments(
     context: RunContext,
 ) -> str:
     """Retrieve all upcoming appointments for the current user."""
+    """
+    Args:
+        None
+    """
     state: CallState = context.userdata
 
     if not state.identified or not state.phone_number:
@@ -167,6 +191,11 @@ async def cancel_appointment(
     appointment_id: Annotated[int, "The appointment ID to cancel"],
 ) -> str:
     """Cancel a specific appointment by its ID."""
+    """
+    Args:
+    - appointment_id: The unique ID of the appointment to cancel. You can find this ID by first calling retrieve_appointments.
+    """
+    
     state: CallState = context.userdata
 
     if not state.identified or not state.phone_number:
@@ -189,6 +218,13 @@ async def modify_appointment(
     new_time: Annotated[Optional[str], "New time e.g. '02:00 PM'"] = None,
 ) -> str:
     """Modify the date or time of an existing appointment."""
+    
+    """
+    Args:
+        - appointment_id: The unique ID of the appointment to modify. You can find this ID by first calling retrieve_appointments.
+        - new_date: The new date for the appointment in YYYY-MM-DD format. Leave empty if you only want to change the time.
+        - new_time: The new time for the appointment, e.g. "02:00 PM". Leave empty if you only want to change the date.
+    """
     state: CallState = context.userdata
 
     if not state.identified or not state.phone_number:
@@ -209,6 +245,11 @@ async def end_conversation(
     summary: Annotated[str, "A brief summary of what was accomplished in this call"],
 ) -> str:
     """End the conversation and generate a call summary. Call this when patient says goodbye or conversation is complete."""
+    """
+    Args:
+        - summary: A brief summary of the call, including any appointments booked, cancelled, or modified. This will be saved to the database along with the call details for future reference.
+    """
+    
     state: CallState = context.userdata
 
     duration = int((datetime.now() - state.start_time).total_seconds())
@@ -376,6 +417,9 @@ async def entrypoint(ctx: agents.JobContext):
             model="sonic-english",
         ),
         vad=silero.VAD.load(),
+        turn_handling=TurnHandlingOptions(
+            turn_detection=MultilingualModel(),
+        ),
         userdata=state,
     )
 

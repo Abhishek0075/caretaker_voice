@@ -259,6 +259,19 @@ async def get_session(session_id: str):
     return session
 
 
+@app.get("/api/sessions/{session_id}/pdf")
+async def download_session_pdf(session_id: str):
+    """Download the PDF summary for a call session."""
+    import os
+    pdf_dir = os.path.join(os.path.dirname(db.DB_PATH), "pdfs")
+    pdf_path = os.path.join(pdf_dir, f"summary_{session_id}.pdf")
+    if not os.path.exists(pdf_path):
+        raise HTTPException(status_code=404, detail="PDF not found")
+    
+    from fastapi.responses import FileResponse
+    return FileResponse(pdf_path, media_type='application/pdf', filename=f"call_summary_{session_id}.pdf")
+
+
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok", "timestamp": datetime.now().isoformat(), "service": "Mykare Voice AI"}

@@ -6,6 +6,8 @@ import asyncio
 from datetime import datetime
 from typing import Optional
 import os
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
 
 DB_PATH = os.getenv("DATABASE_PATH", "./mykare.db")
 
@@ -280,7 +282,80 @@ async def save_call_session(session_data: dict) -> dict:
             ),
         )
         await db.commit()
-    return {"success": True}
+
+    # Generate PDF summary
+    pdf_path = generate_call_summary_pdf(session_data)
+    
+    return {"success": True, "pdf_path": pdf_path}
+
+
+def generate_call_summary_pdf(session_data: dict) -> str:
+    """Generate a PDF summary of the call."""
+    session_id = session_data.get("session_id")
+    filename = f"summary_{session_id}.pdf"
+    pdf_dir = os.path.join(os.path.dirname(DB_PATH), "pdfs")
+    os.makedirs(pdf_dir, exist_ok=True)
+    filepath = os.path.join(pdf_dir, filename)
+
+    c = canvas.Canvas(filepath, pagesize=letter)
+    width, height = letter
+
+    # Title
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(100, height - 100, "Mykare Health Call Summary")
+
+    # Patient Info
+    c.setFont("Helvetica", 12)
+    y = height - 130
+    c.drawString(100, y, f"Patient Name: {session_data.get('patient_name', 'N/A')}")
+    y -= 20
+    c.drawString(100, y, f"Phone Number: {session_data.get('phone_number', 'N/A')}")
+    y -= 20
+    c.drawString(100, y, f"Session ID: {session_id}")
+    y -= 20
+    c.drawString(100, y, f"Call Duration: {session_data.get('duration_seconds', 0)} seconds")
+    y -= 40
+
+    # Summary
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(100, y, "Call Summary:")
+    y -= 20
+    c.setFont("Helvetica", 12)
+    summary = session_data.get("summary", "")
+    # Wrap text
+    lines = []
+    words = summary.split()
+    line = ""
+    for word in words:
+        if c.stringWidth(line + word, "Helvetica", 12) < 400:
+            line += word + " "
+        else:
+            lines.append(line)
+            line = word + " "
+    lines.append(line)
+    for line in lines:
+        c.drawString(100, y, line.strip())
+        y -= 15
+        if y < 100:
+            c.showPage()
+            y = height - 100
+
+    # Appointments Booked
+    y -= 20
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(100, y, "Appointments Booked:")
+    y -= 20
+    c.setFont("Helvetica", 12)
+    appointments = session_data.get("appointments_booked", [])
+    if appointments:
+        for appt in appointments:
+            c.drawString(100, y, f"- {appt.get('date')} at {appt.get('time')} with {appt.get('doctor')}")
+            y -= 15
+    else:
+        c.drawString(100, y, "None")
+
+    c.save()
+    return filepath
 
 
 async def get_call_session(session_id: str) -> Optional[dict]:
