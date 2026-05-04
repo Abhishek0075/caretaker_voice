@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect } from 'react'
 import {
   LiveKitRoom,
   useVoiceAssistant,
@@ -7,9 +7,8 @@ import {
   VoiceAssistantControlBar,
   useRoomContext,
 } from '@livekit/components-react'
-import type { AgentStatus, ToolEvent, ToolName } from '@/types'
+import type { AgentStatus, ToolName } from '@/types'
 
-// ─── Inner component that uses LiveKit hooks ───
 function VoiceSessionInner({
   onAgentStatusChange,
   onToolCall,
@@ -22,7 +21,6 @@ function VoiceSessionInner({
   const { state: agentState, audioTrack } = useVoiceAssistant()
   const room = useRoomContext()
 
-  // Map LiveKit agent state to our AgentStatus
   useEffect(() => {
     const map: Record<string, AgentStatus> = {
       disconnected: 'idle',
@@ -35,10 +33,8 @@ function VoiceSessionInner({
     onAgentStatusChange(map[agentState] || 'idle')
   }, [agentState, onAgentStatusChange])
 
-  // Listen for data messages from the agent (tool call events)
   useEffect(() => {
     if (!room) return
-
     const handler = (payload: Uint8Array) => {
       try {
         const text = new TextDecoder().decode(payload)
@@ -48,7 +44,6 @@ function VoiceSessionInner({
         }
       } catch { }
     }
-
     room.on('dataReceived', handler)
     return () => { room.off('dataReceived', handler) }
   }, [room, onToolCall])
@@ -73,16 +68,33 @@ function VoiceSessionInner({
         />
       </div>
 
-      {/* Control bar (mute/unmute, disconnect) */}
-      <VoiceAssistantControlBar
-        onDisconnectClick={onDisconnect}
-        style={{ background: 'transparent' } as React.CSSProperties}
-      />
+      {/* Mute toggle + End call button */}
+      <div className="flex items-center gap-3 w-full">
+        {/* LiveKit built-in mute button only */}
+        <div style={{ flex: 1 }}>
+          <VoiceAssistantControlBar />
+        </div>
+
+        {/* Custom end call button */}
+        <button
+          onClick={onDisconnect}
+          className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200"
+          style={{
+            background: 'rgba(248,113,113,0.1)',
+            border: '1px solid rgba(248,113,113,0.3)',
+            color: '#f87171',
+            cursor: 'pointer',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(248,113,113,0.2)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'rgba(248,113,113,0.1)')}
+        >
+          📵 End Call
+        </button>
+      </div>
     </div>
   )
 }
 
-// ─── Outer component with LiveKitRoom provider ───
 interface LiveKitSessionProps {
   token: string
   livekitUrl: string
