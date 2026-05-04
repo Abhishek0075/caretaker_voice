@@ -347,7 +347,15 @@ async def entrypoint(ctx: agents.JobContext):
             model="sonic-english",
         ),
         vad=silero.VAD.load(),
-        # For more faster generation I can use premptive generation with turn detection, but it can lead to more tool calling mistakes since the model has less context when deciding to call tools
+        ## For more faster generation I can use premptive generation with turn detection, but it can lead to more tool calling mistakes since the model has less context when deciding to call tools
+        # turn_handling = {
+        #     "preemptive_generation": {
+        #         "enabled": True,
+        #         "preemptive_tts": True,
+        #         "max_speech_duration": 10.0,
+        #         "max_retries": 3,
+        #     },
+        # }
         turn_handling=TurnHandlingOptions(
             turn_detection=MultilingualModel(),
         ),

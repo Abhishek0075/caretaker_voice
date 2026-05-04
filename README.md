@@ -154,3 +154,21 @@ npm run dev
 - **Backend**: FastAPI + aiosqlite
 - **Frontend**: Next.js 15 + TypeScript
 - **Database**: SQLite (via aiosqlite)
+
+
+## Note
+
+You can use premptive generation in turn handling for faster generation by using :
+
+
+`
+turn_handling = {
+
+    "preemptive_generation": {
+        "enabled": True,
+        "preemptive_tts": True,
+        "max_speech_duration": 10.0,
+        "max_retries": 3,
+    },
+}`
+
