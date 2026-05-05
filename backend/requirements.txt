@@ -12,3 +12,4 @@ python-multipart>=0.0.12
 pydantic>=2.9.0
 livekit-api>=0.7.0
 reportlab>=4.0.0
+livekit-agents[turn-detector]~=1.5
